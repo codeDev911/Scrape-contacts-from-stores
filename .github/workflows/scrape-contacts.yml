@@ -1,0 +1,65 @@
+name: Scrape store contacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Only scrape first N new domains (0 = all)"
+        default: "0"
+      threads:
+        description: "Parallel workers"
+        default: "8"
+      delay:
+        description: "Seconds each worker waits after a site"
+        default: "1.0"
+      contact_page:
+        description: "Fallback to /pages/contact when footer is empty"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Scrape footers
+        env:
+          LIMIT: ${{ inputs.limit || '0' }}
+          THREADS: ${{ inputs.threads || '8' }}
+          DELAY: ${{ inputs.delay || '1.0' }}
+          CONTACT_PAGE: ${{ inputs.contact_page }}
+        run: |
+          ARGS="--input list.txt --output contacts.csv --limit $LIMIT --threads $THREADS --delay $DELAY"
+          [ "$CONTACT_PAGE" = "true" ] && ARGS="$ARGS --contact-page"
+          python scrape_contacts.py $ARGS
+
+      - name: Summary
+        run: |
+          echo "### Contacts" >> "$GITHUB_STEP_SUMMARY"
+          echo "Rows: $(($(wc -l < contacts.csv) - 1))" >> "$GITHUB_STEP_SUMMARY"
+          echo "With status ok: $(grep -c ',ok$' contacts.csv || true)" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contacts
+          path: contacts.csv
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add contacts.csv
+          git diff --staged --quiet || git commit -m "Update contacts.csv"
+          git push
